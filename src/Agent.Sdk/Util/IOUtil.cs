@@ -204,6 +204,37 @@ namespace Microsoft.VisualStudio.Services.Agent.Util
             }
         }
 
+        public static void MoveDirectory(string sourceDir, string targetDir, string stagingDir, CancellationToken token)
+        {
+            ArgUtil.Directory(sourceDir, nameof(sourceDir));
+            ArgUtil.NotNullOrEmpty(targetDir, nameof(targetDir));
+            ArgUtil.NotNullOrEmpty(stagingDir, nameof(stagingDir));
+
+            // delete existing stagingDir
+            if (Directory.Exists(stagingDir))
+            {
+                DeleteDirectory(stagingDir, token);
+            }
+
+            // make sure parent dir of stagingDir exist
+            Directory.CreateDirectory(Path.GetDirectoryName(stagingDir));
+
+            // move source to staging
+            Directory.Move(sourceDir, stagingDir);
+
+            // delete existing targetDir
+            if(Directory.Exists(targetDir))
+            {
+                DeleteDirectory(targetDir, token);
+            }
+
+            // make sure parent dir of targetDir exist
+            Directory.CreateDirectory(Path.GetDirectoryName(targetDir));
+            
+            // move staging to target
+            Directory.Move(stagingDir, targetDir);
+        }
+
         /// <summary>
         /// Given a path and directory, return the path relative to the directory.  If the path is not
         /// under the directory the path is returned un modified.  Examples:

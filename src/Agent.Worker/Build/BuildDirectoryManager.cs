@@ -12,6 +12,7 @@ using Microsoft.TeamFoundation.DistributedTask.Pipelines;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 namespace Microsoft.VisualStudio.Services.Agent.Worker.Build
 {
@@ -142,6 +143,78 @@ namespace Microsoft.VisualStudio.Services.Agent.Worker.Build
                 if (string.IsNullOrEmpty(newConfig.RepositoryType))
                 {
                     newConfig.RepositoryType = repository.Type;
+                }
+
+                // Make sure repository in the right location.
+                if (string.IsNullOrEmpty(newConfig.RepositoryDirectory))
+                {
+                    newConfig.RepositoryDirectory = newConfig.SourcesDirectory;
+                }
+
+                string requiredRepositoryPath;
+                var path = repository.Properties.Get<string>(RepositoryPropertyNames.Path);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    if (path.IndexOfAny(Path.GetInvalidPathChars()) > -1)
+                    {
+                        throw new InvalidOperationException($"{path} contains invalid path characters.");
+                    }
+                    else if (Path.GetFileName(path).IndexOfAny(Path.GetInvalidFileNameChars()) > -1)
+                    {
+                        throw new InvalidOperationException($"{path} contains invalid folder name characters.");
+                    }
+                    else if (path.Contains($"..{Path.DirectorySeparatorChar}") || path.Contains($"..{Path.AltDirectorySeparatorChar}"))
+                    {
+                        throw new InvalidOperationException($"{path} can not contains relative path.");
+                    }
+                    else if (Path.IsPathRooted(path))
+                    {
+                        throw new InvalidOperationException($"{path} can not be a rooted path.");
+                    }
+                    else
+                    {
+                        requiredRepositoryPath = Path.Combine(newConfig.SourcesDirectory, path);
+                    }
+                }
+                else
+                {
+                    // When repository doesn't has path set, default to sources directory 1/s
+                    requiredRepositoryPath = newConfig.SourcesDirectory;
+                }
+
+                Trace.Info($"Repository requires to be placed at '{requiredRepositoryPath}', current location is '{newConfig.RepositoryDirectory}'");
+                if (!string.Equals(newConfig.RepositoryDirectory, requiredRepositoryPath, IOUtil.FilePathStringComparison))
+                {
+                    executionContext.Output($"Repository is current at '{newConfig.RepositoryDirectory}', move to '{requiredRepositoryPath}'.");
+                    var count = 1;
+                    var staging = Path.Combine(HostContext.GetDirectory(WellKnownDirectory.Work), newConfig.BuildDirectory, $"_{count}");
+                    while (Directory.Exists(staging))
+                    {
+                        count++;
+                        staging = Path.Combine(HostContext.GetDirectory(WellKnownDirectory.Work), newConfig.BuildDirectory, $"_{count}");
+                    }
+
+                    var currentRepoPath = Path.Combine(HostContext.GetDirectory(WellKnownDirectory.Work), newConfig.RepositoryDirectory);
+                    var expectRepoPath = Path.Combine(HostContext.GetDirectory(WellKnownDirectory.Work), requiredRepositoryPath);
+                    try
+                    {
+                        executionContext.Debug($"Move existing repository '{currentRepoPath}' to '{expectRepoPath}' via staging directory '{staging}'.");
+                        IOUtil.MoveDirectory(currentRepoPath, expectRepoPath, staging, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.Error("Catch exception during repository move.");
+                        Trace.Error(ex);
+                        executionContext.Warning("Unable move existing repository to required location, try delete existing repository.");
+                        IOUtil.DeleteDirectory(currentRepoPath, CancellationToken.None);
+                    }
+                    finally
+                    {
+                        IOUtil.DeleteDirectory(staging, CancellationToken.None);
+                    }
+
+                    Trace.Info($"Repository has moved to '{requiredRepositoryPath}'.");
+                    newConfig.RepositoryDirectory = requiredRepositoryPath;
                 }
 
                 // For existing tracking config files, update the job run properties.
